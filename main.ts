@@ -52,6 +52,9 @@ interface S3UploaderSettings {
 	forcePathStyle: boolean;
 	useCustomImageUrl: boolean;
 	customImageUrl: string;
+	enableUrlSignature: boolean;
+	urlSignSecret: string;
+	urlExpireSeconds: number;
 	uploadVideo: boolean;
 	uploadAudio: boolean;
 	uploadPdf: boolean;
@@ -78,6 +81,9 @@ const DEFAULT_SETTINGS: S3UploaderSettings = {
 	forcePathStyle: false,
 	useCustomImageUrl: false,
 	customImageUrl: "",
+	enableUrlSignature: false,
+	urlSignSecret: "",
+	urlExpireSeconds: 0,
 	uploadVideo: false,
 	uploadAudio: false,
 	uploadPdf: false,
@@ -187,6 +193,16 @@ export default class S3UploaderPlugin extends Plugin {
 		}
 	}
 
+	async generateSignatureQuery(path: string, secretKey: string, expiresInSeconds: number): Promise<string> {
+		let expiryTime = Math.floor(Date.now() / 1000) + expiresInSeconds;
+		let stringToSign = path;
+		if (expiresInSeconds > 0) {
+			stringToSign += expiryTime;
+		}
+		let signature = await generateHmacSha256(secretKey, stringToSign);
+		return `signature=${signature}` + (expiresInSeconds > 0 ? `&expires=${expiryTime}` : "");
+	}
+
 	async uploadFile(file: File, key: string): Promise<string> {
 		const buf = await file.arrayBuffer();
 		await this.s3.send(
@@ -198,9 +214,24 @@ export default class S3UploaderPlugin extends Plugin {
 			}),
 		);
 		let urlString = this.settings.imageUrlPath + key;
-		if (this.settings.customQueryString) {
-			urlString += "?" + this.settings.customQueryString;;
+		let queryStrings = "";
+		if (this.settings.enableUrlSignature) {
+			if (!this.settings.urlSignSecret) {
+				new Notice("URL signature enabled but no secret provided!");
+			} else {
+				queryStrings = await this.generateSignatureQuery(
+					"/" + key, 
+					this.settings.urlSignSecret, 
+					this.settings.urlExpireSeconds
+				);
+			}
 		}
+		if (this.settings.customQueryString) {
+			queryStrings = queryStrings 
+				? `${queryStrings}&${this.settings.customQueryString}` 
+				: this.settings.customQueryString;
+		}
+		urlString += (queryStrings ? `?${queryStrings}` : "");
 		return urlString;
 	}
 
@@ -525,6 +556,8 @@ export default class S3UploaderPlugin extends Plugin {
 
 class S3UploaderSettingTab extends PluginSettingTab {
 	plugin: S3UploaderPlugin;
+	private urlSignSecretSettings: Setting;
+	private urlExpireSecondsSettings: Setting;
 	// Add properties to store compression setting elements
 	private compressionSizeSettings: Setting;
 	private compressionQualitySettings: Setting;
@@ -552,6 +585,12 @@ class S3UploaderSettingTab extends PluginSettingTab {
 			this.compressionDimensionSettings.settingEl.style.display =
 				displayStyle;
 		}
+	}
+
+	private toggleUrlSignSettings(show: boolean): void {
+		const displayStyle = show ? "" : "none";
+		this.urlSignSecretSettings.settingEl.style.display = displayStyle;
+		this.urlExpireSecondsSettings.settingEl.style.display = displayStyle;
 	}
 
 	display(): void {
@@ -803,6 +842,69 @@ class S3UploaderSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("Custom Query String")
+			.setDesc("Appended to the end of the URL. Use of 'key=value&key=value...'. Optional")
+			.addText((text) =>
+				text
+					.setPlaceholder("Empty means no query string")
+					.setValue(this.plugin.settings.customQueryString)
+					.onChange(async (value) => {
+						this.plugin.settings.customQueryString = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+		
+		new Setting(containerEl)
+			.setName("Enable URL Signature")
+			.setDesc(
+				"Enable URL signature for image path(and expire time). Must be adapted to your CDN provider.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.enableUrlSignature)
+					.onChange(async (value) => {
+						this.plugin.settings.enableUrlSignature = value;
+						await this.plugin.saveSettings();
+						this.toggleUrlSignSettings(value);
+					});
+			});
+
+		this.urlSignSecretSettings = new Setting(containerEl)
+			.setName("URL Signature Secret Key")
+			.setDesc("Secret key for signing URLs. If not provided, the URL will not be signed.")
+			.addText((text) => {
+				wrapTextWithPasswordHide(text);
+				text.setPlaceholder("URL signature secret key")
+					.setValue(this.plugin.settings.urlSignSecret)
+					.onChange(async (value) => {
+						this.plugin.settings.urlSignSecret = value.trim();
+						await this.plugin.saveSettings();
+					});
+			});
+
+		this.urlExpireSecondsSettings = new Setting(containerEl)
+			.setName("URL Signature Expiration")
+			.setDesc(
+				"Number of seconds before the URL expires. `0` means no expiration.",
+			)
+			.addText((text) => {
+				text
+					.setPlaceholder("0")
+					.setValue(this.plugin.settings.urlExpireSeconds.toString())
+					.onChange(async (value) => {
+						const newValue = parseInt(value);
+						if (isNaN(newValue) || newValue < 0) {
+							new Notice(
+								"Do you have a time machine? Try to set an expiration time greater than 0s.",
+							);
+							return;
+						}
+						this.plugin.settings.urlExpireSeconds = newValue;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
 			.setName("Bypass local CORS check")
 			.setDesc(
 				"Bypass local CORS preflight checks - it might work on later versions of Obsidian.",
@@ -815,18 +917,6 @@ class S3UploaderSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
-		new Setting(containerEl)
-			.setName("Custom Query String")
-			.setDesc("Appended to the end of the URL. Use of 'key=value&key=value...'. Optional")
-			.addText((text) =>
-				text
-					.setPlaceholder("Empty means no query string")
-					.setValue(this.plugin.settings.customQueryString)
-					.onChange(async (value) => {
-						this.plugin.settings.customQueryString = value;
-						await this.plugin.saveSettings();
-					}),
-			);
 
 		new Setting(containerEl)
 			.setName("Enable Image Compression")
@@ -912,6 +1002,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 					}),
 			);
 
+		this.toggleUrlSignSettings(this.plugin.settings.enableUrlSignature);
 		// Set initial visibility based on current settings
 		this.toggleCompressionSettings(
 			this.plugin.settings.enableImageCompression,
@@ -1086,6 +1177,17 @@ const bufferToArrayBuffer = (b: Buffer | Uint8Array | ArrayBufferView) => {
 	return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
 };
 
+const arrayBufferToHex = (buffer: ArrayBuffer) => {
+	const byteArray = new Uint8Array(buffer);
+    const hexParts: string[] = [];
+    byteArray.forEach(byte => {
+      const hex = byte.toString(16);
+      const paddedHex = ('00' + hex).slice(-2);
+      hexParts.push(paddedHex);
+    });
+    return hexParts.join('');
+}
+
 async function generateFileHash(data: Uint8Array): Promise<string> {
 	const hashBuffer = await crypto.subtle.digest("SHA-256", data);
 	const hashArray = Array.from(new Uint8Array(hashBuffer));
@@ -1093,4 +1195,32 @@ async function generateFileHash(data: Uint8Array): Promise<string> {
 		.map((b) => b.toString(16).padStart(2, "0"))
 		.join("");
 	return hashHex.slice(0, 32); // Truncate to same length as MD5 for compatibility
+}
+
+async function generateHmacSha256(secretKey: string, message: string): Promise<string> {
+	try {
+		const encoder: TextEncoder = new TextEncoder();
+		const keyData: Uint8Array = encoder.encode(secretKey);
+		const cryptoKey: CryptoKey = await crypto.subtle.importKey(
+			'raw',
+			keyData,
+			{
+				name: 'HMAC',
+				hash: 'SHA-256'
+			} as HmacImportParams,
+			false,
+			['sign']
+		);
+		const messageData: Uint8Array = encoder.encode(message);
+		const signatureBuffer: ArrayBuffer = await crypto.subtle.sign(
+			'HMAC',
+			cryptoKey,
+			messageData
+		);
+		const signatureHex: string = arrayBufferToHex(signatureBuffer);
+		return signatureHex;
+    } catch (error) {
+		console.error('HMAC-SHA256 generation failed:', error);
+		throw error;
+    }
 }
