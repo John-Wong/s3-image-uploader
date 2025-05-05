@@ -56,8 +56,7 @@ interface S3UploaderSettings {
 	uploadAudio: boolean;
 	uploadPdf: boolean;
 	bypassCors: boolean;
-	queryStringValue: string;
-	queryStringKey: string;
+	customQueryString: string;
 	enableImageCompression: boolean;
 	maxImageCompressionSize: number;
 	imageCompressionQuality: number;
@@ -83,8 +82,7 @@ const DEFAULT_SETTINGS: S3UploaderSettings = {
 	uploadAudio: false,
 	uploadPdf: false,
 	bypassCors: false,
-	queryStringValue: "",
-	queryStringKey: "",
+	customQueryString: "",
 	enableImageCompression: false,
 	maxImageCompressionSize: 1,
 	imageCompressionQuality: 0.7,
@@ -200,15 +198,8 @@ export default class S3UploaderPlugin extends Plugin {
 			}),
 		);
 		let urlString = this.settings.imageUrlPath + key;
-		if (this.settings.queryStringKey && this.settings.queryStringValue) {
-			const urlObject = new URL(urlString);
-
-			// The searchParams property provides methods to manipulate query parameters
-			urlObject.searchParams.append(
-				this.settings.queryStringKey,
-				this.settings.queryStringValue,
-			);
-			urlString = urlObject.toString();
+		if (this.settings.customQueryString) {
+			urlString += "?" + this.settings.customQueryString;;
 		}
 		return urlString;
 	}
@@ -825,27 +816,14 @@ class S3UploaderSettingTab extends PluginSettingTab {
 					});
 			});
 		new Setting(containerEl)
-			.setName("Query String Key")
-			.setDesc("Appended to the end of the URL. Optional")
+			.setName("Custom Query String")
+			.setDesc("Appended to the end of the URL. Use of 'key=value&key=value...'. Optional")
 			.addText((text) =>
 				text
-					.setPlaceholder("Empty means no query string key")
-					.setValue(this.plugin.settings.queryStringKey)
+					.setPlaceholder("Empty means no query string")
+					.setValue(this.plugin.settings.customQueryString)
 					.onChange(async (value) => {
-						this.plugin.settings.queryStringKey = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName("Query String Value")
-			.setDesc("Appended to the end of the URL. Optional")
-			.addText((text) =>
-				text
-					.setPlaceholder("Empty means no query string value")
-					.setValue(this.plugin.settings.queryStringValue)
-					.onChange(async (value) => {
-						this.plugin.settings.queryStringValue = value;
+						this.plugin.settings.customQueryString = value;
 						await this.plugin.saveSettings();
 					}),
 			);
