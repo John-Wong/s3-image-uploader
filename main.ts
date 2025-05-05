@@ -55,6 +55,8 @@ interface S3UploaderSettings {
 	enableUrlSignature: boolean;
 	urlSignSecret: string;
 	urlExpireSeconds: number;
+	enableWeserv: boolean;
+	weservParams: string;
 	uploadVideo: boolean;
 	uploadAudio: boolean;
 	uploadPdf: boolean;
@@ -84,6 +86,8 @@ const DEFAULT_SETTINGS: S3UploaderSettings = {
 	enableUrlSignature: false,
 	urlSignSecret: "",
 	urlExpireSeconds: 0,
+	enableWeserv: false,
+	weservParams: "",
 	uploadVideo: false,
 	uploadAudio: false,
 	uploadPdf: false,
@@ -232,6 +236,12 @@ export default class S3UploaderPlugin extends Plugin {
 				: this.settings.customQueryString;
 		}
 		urlString += (queryStrings ? `?${queryStrings}` : "");
+		if (this.settings.enableWeserv) {
+			urlString = urlString.replace("?", "%3F");
+			urlString = urlString.replace("&", "%26");
+			urlString = `https://wsrv.nl/?url=${urlString}` 
+				+ (this.settings.weservParams ? this.settings.weservParams : "");
+		}
 		return urlString;
 	}
 
@@ -558,6 +568,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 	plugin: S3UploaderPlugin;
 	private urlSignSecretSettings: Setting;
 	private urlExpireSecondsSettings: Setting;
+	private weservParamsSetting: Setting;
 	// Add properties to store compression setting elements
 	private compressionSizeSettings: Setting;
 	private compressionQualitySettings: Setting;
@@ -591,6 +602,11 @@ class S3UploaderSettingTab extends PluginSettingTab {
 		const displayStyle = show ? "" : "none";
 		this.urlSignSecretSettings.settingEl.style.display = displayStyle;
 		this.urlExpireSecondsSettings.settingEl.style.display = displayStyle;
+	}
+
+	private toggleWeservSettings(show: boolean): void {
+		const displayStyle = show ? "" : "none";
+		this.weservParamsSetting.settingEl.style.display = displayStyle;
 	}
 
 	display(): void {
@@ -905,6 +921,36 @@ class S3UploaderSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
+			.setName("Enable wsrv.nl Image Service")
+			.setDesc(
+				"Use wsrv.nl to cache and resize images. It's totally free!",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.enableWeserv)
+					.onChange(async (value) => {
+						this.plugin.settings.enableWeserv = value;
+						await this.plugin.saveSettings();
+						this.toggleWeservSettings(value);
+					});
+			});
+
+		this.weservParamsSetting = new Setting(containerEl)
+			.setName("Default wsrv.nl Parameters")
+			.setDesc(
+				"How would you adjust your images by default? Refer to `https://wsrv.nl/docs`. Optional",
+			)
+			.addText((text) => {
+				text
+					.setPlaceholder("Use of `&w=300&h=300...`")
+					.setValue(this.plugin.settings.weservParams)
+					.onChange(async (value) => {
+						this.plugin.settings.weservParams = value.trim();
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
 			.setName("Bypass local CORS check")
 			.setDesc(
 				"Bypass local CORS preflight checks - it might work on later versions of Obsidian.",
@@ -1003,6 +1049,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 			);
 
 		this.toggleUrlSignSettings(this.plugin.settings.enableUrlSignature);
+		this.toggleWeservSettings(this.plugin.settings.enableWeserv);
 		// Set initial visibility based on current settings
 		this.toggleCompressionSettings(
 			this.plugin.settings.enableImageCompression,
