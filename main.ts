@@ -433,12 +433,7 @@ export default class S3UploaderPlugin extends Plugin {
 		}
 	}
 
-	async onload() {
-		await this.loadSettings();
-
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new S3UploaderSettingTab(this.app, this));
-
+	createS3Client(): void {
 		const apiEndpoint = this.settings.useCustomEndpoint
 			? this.settings.customEndpoint
 			: `https://s3.${this.settings.region}.amazonaws.com/`;
@@ -473,6 +468,15 @@ export default class S3UploaderPlugin extends Plugin {
 				requestHandler: new ObsHttpHandler({ keepAlive: false }),
 			});
 		}
+	}
+
+	async onload() {
+		await this.loadSettings();
+
+		// This adds a settings tab so the user can configure various aspects of the plugin
+		this.addSettingTab(new S3UploaderSettingTab(this.app, this));
+
+		this.createS3Client();
 
 		this.addCommand({
 			id: "upload-image",
@@ -639,6 +643,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.accessKey)
 					.onChange(async (value) => {
 						this.plugin.settings.accessKey = value.trim();
+						this.plugin.createS3Client();
 						await this.plugin.saveSettings();
 					});
 			});
@@ -652,6 +657,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.secretKey)
 					.onChange(async (value) => {
 						this.plugin.settings.secretKey = value.trim();
+						this.plugin.createS3Client();
 						await this.plugin.saveSettings();
 					});
 			});
@@ -665,6 +671,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.region)
 					.onChange(async (value) => {
 						this.plugin.settings.region = value.trim();
+						this.plugin.createS3Client();
 						await this.plugin.saveSettings();
 					}),
 			);
@@ -678,6 +685,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.bucket)
 					.onChange(async (value) => {
 						this.plugin.settings.bucket = value.trim();
+						this.plugin.createS3Client();
 						await this.plugin.saveSettings();
 					}),
 			);
@@ -790,6 +798,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.useCustomEndpoint)
 					.onChange(async (value) => {
 						this.plugin.settings.useCustomEndpoint = value;
+						this.plugin.createS3Client();
 						await this.plugin.saveSettings();
 					});
 			});
@@ -809,6 +818,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 							: "https://" + value;
 						value = value.replace(/([^/])$/, "$1/"); // Force to end with slash
 						this.plugin.settings.customEndpoint = value.trim();
+						this.plugin.createS3Client();
 						await this.plugin.saveSettings();
 					}),
 			);
@@ -823,6 +833,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.forcePathStyle)
 					.onChange(async (value) => {
 						this.plugin.settings.forcePathStyle = value;
+						this.plugin.createS3Client();
 						await this.plugin.saveSettings();
 					});
 			});
@@ -835,6 +846,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.useCustomImageUrl)
 					.onChange(async (value) => {
 						this.plugin.settings.useCustomImageUrl = value;
+						this.plugin.createS3Client();
 						await this.plugin.saveSettings();
 					});
 			});
@@ -853,6 +865,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 							: "https://" + value;
 						value = value.replace(/([^/])$/, "$1/"); // Force to end with slash
 						this.plugin.settings.customImageUrl = value.trim();
+						this.plugin.createS3Client();
 						await this.plugin.saveSettings();
 					}),
 			);
@@ -960,6 +973,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.bypassCors)
 					.onChange(async (value) => {
 						this.plugin.settings.bypassCors = value;
+						this.plugin.createS3Client();
 						await this.plugin.saveSettings();
 					});
 			});
