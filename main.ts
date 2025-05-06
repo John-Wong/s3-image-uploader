@@ -55,6 +55,7 @@ interface S3UploaderSettings {
 	enableUrlSignature: boolean;
 	urlSignSecret: string;
 	urlExpireSeconds: number;
+	enableSignUriEncoded: boolean;
 	enableWeserv: boolean;
 	weservParams: string;
 	uploadVideo: boolean;
@@ -85,7 +86,8 @@ const DEFAULT_SETTINGS: S3UploaderSettings = {
 	customImageUrl: "",
 	enableUrlSignature: false,
 	urlSignSecret: "",
-	urlExpireSeconds: 0,
+	urlExpireSeconds: 7889400000,
+	enableSignUriEncoded: false,
 	enableWeserv: false,
 	weservParams: "",
 	uploadVideo: false,
@@ -201,9 +203,12 @@ export default class S3UploaderPlugin extends Plugin {
 		let expiryTime = Math.floor(Date.now() / 1000) + expiresInSeconds;
 		let stringToSign = path;
 		if (expiresInSeconds > 0) {
-			stringToSign += expiryTime;
+			stringToSign += "@" + expiryTime;
 		}
 		let signature = await generateHmacSha256(secretKey, stringToSign);
+		if (this.settings.enableSignUriEncoded) {
+			signature = encodeURIComponent(signature);
+		}
 		return `signature=${signature}` + (expiresInSeconds > 0 ? `&expires=${expiryTime}` : "");
 	}
 
@@ -237,8 +242,11 @@ export default class S3UploaderPlugin extends Plugin {
 		}
 		urlString += (queryStrings ? `?${queryStrings}` : "");
 		if (this.settings.enableWeserv) {
-			urlString = urlString.replace("?", "%3F");
-			urlString = urlString.replace("&", "%26");
+			if (this.settings.enableSignUriEncoded) {
+				urlString = encodeURI(urlString);
+			}
+			urlString = urlString.split("?").join("%3F");
+			urlString = urlString.split("&").join("%26");
 			urlString = `https://wsrv.nl/?url=${urlString}` 
 				+ (this.settings.weservParams ? this.settings.weservParams : "");
 		}
@@ -572,6 +580,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 	plugin: S3UploaderPlugin;
 	private urlSignSecretSettings: Setting;
 	private urlExpireSecondsSettings: Setting;
+	private enableSignUriEncodedSettings: Setting;
 	private weservParamsSetting: Setting;
 	// Add properties to store compression setting elements
 	private compressionSizeSettings: Setting;
@@ -606,6 +615,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 		const displayStyle = show ? "" : "none";
 		this.urlSignSecretSettings.settingEl.style.display = displayStyle;
 		this.urlExpireSecondsSettings.settingEl.style.display = displayStyle;
+		this.enableSignUriEncodedSettings.settingEl.style.display = displayStyle;
 	}
 
 	private toggleWeservSettings(show: boolean): void {
@@ -886,7 +896,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Enable URL Signature")
 			.setDesc(
-				"Enable URL signature for image path(and expire time). Must be adapted to your CDN provider.",
+				"Enable URL signature for image(path@expiry). Must be adapted to your CDN provider.",
 			)
 			.addToggle((toggle) => {
 				toggle
@@ -914,7 +924,7 @@ class S3UploaderSettingTab extends PluginSettingTab {
 		this.urlExpireSecondsSettings = new Setting(containerEl)
 			.setName("URL Signature Expiration")
 			.setDesc(
-				"Number of seconds before the URL expires. `0` means no expiration.",
+				"Number of seconds before the URL expires. Expires in 250 years by default. `0` means no expiration.",
 			)
 			.addText((text) => {
 				text
@@ -924,11 +934,25 @@ class S3UploaderSettingTab extends PluginSettingTab {
 						const newValue = parseInt(value);
 						if (isNaN(newValue) || newValue < 0) {
 							new Notice(
-								"Do you have a time machine? Try to set an expiration time greater than 0s.",
+								"Do you have a time machine? If not, set an expiration time greater than 0s.",
 							);
 							return;
 						}
 						this.plugin.settings.urlExpireSeconds = newValue;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		this.enableSignUriEncodedSettings = new Setting(containerEl)
+			.setName("Enable URL-safe Signature")
+			.setDesc(
+				"Encode the signature using encodeURIComponet(). Required when using Cloudflare, CacheFly, etc.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.enableSignUriEncoded)
+					.onChange(async (value) => {
+						this.plugin.settings.enableSignUriEncoded = value;
 						await this.plugin.saveSettings();
 					});
 			});
@@ -1238,15 +1262,19 @@ const bufferToArrayBuffer = (b: Buffer | Uint8Array | ArrayBufferView) => {
 	return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
 };
 
-const arrayBufferToHex = (buffer: ArrayBuffer) => {
-	const byteArray = new Uint8Array(buffer);
-    const hexParts: string[] = [];
-    byteArray.forEach(byte => {
-      const hex = byte.toString(16);
-      const paddedHex = ('00' + hex).slice(-2);
-      hexParts.push(paddedHex);
-    });
-    return hexParts.join('');
+// const arrayBufferToHex = (buffer: ArrayBuffer) => {
+// 	const byteArray = new Uint8Array(buffer);
+//     const hexParts: string[] = [];
+//     byteArray.forEach(byte => {
+//       const hex = byte.toString(16);
+//       const paddedHex = ('00' + hex).slice(-2);
+//       hexParts.push(paddedHex);
+//     });
+//     return hexParts.join('');
+// }
+
+const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
+	return btoa(String.fromCharCode(...new Uint8Array(buffer)));
 }
 
 async function generateFileHash(data: Uint8Array): Promise<string> {
@@ -1265,10 +1293,7 @@ async function generateHmacSha256(secretKey: string, message: string): Promise<s
 		const cryptoKey: CryptoKey = await crypto.subtle.importKey(
 			'raw',
 			keyData,
-			{
-				name: 'HMAC',
-				hash: 'SHA-256'
-			} as HmacImportParams,
+			{ name: 'HMAC', hash: 'SHA-256' } as HmacImportParams,
 			false,
 			['sign']
 		);
@@ -1278,8 +1303,8 @@ async function generateHmacSha256(secretKey: string, message: string): Promise<s
 			cryptoKey,
 			messageData
 		);
-		const signatureHex: string = arrayBufferToHex(signatureBuffer);
-		return signatureHex;
+		const signatureBase64: string = arrayBufferToBase64(signatureBuffer);
+		return signatureBase64;
     } catch (error) {
 		console.error('HMAC-SHA256 generation failed:', error);
 		throw error;
